@@ -1,0 +1,14 @@
+[package]
+name = "axum-ts-client"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client"
+description = "Auto-generate typed TypeScript API clients from Axum route metadata"
+keywords = ["axum", "typescript", "codegen", "api-client"]
+categories = ["development-tools", "web-programming"]
+
+# Zero dependencies — pure std
+[dependencies]
+
+[dev-dependencies]

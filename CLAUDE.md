@@ -39,8 +39,17 @@ cargo fmt --check             # Format check
 
 This crate uses only `std` — no `syn`, `quote`, `proc-macro2`. The macro uses `stringify!()` for type names, avoiding type resolution at compile time.
 
+## Versioning
+
+- **Semantic versioning** is automated via [knope](https://knope.tech) + Forgejo CI
+- **NEVER manually edit version numbers** in `Cargo.toml` — knope manages them from conventional commits
+- `feat:` → minor bump, `fix:` → patch bump, `feat!:` / `fix!:` / `BREAKING CHANGE:` → major bump
+- Pushing to `main` triggers: CI check → `knope release` → version bump + changelog + Forgejo release + `cargo publish`
+- The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
+- To preview what knope will do: `knope release --dry-run`
+
 ## Conventions
 
-- **Conventional commits** for all commit messages
+- **Conventional commits** for all commit messages — this directly drives automated versioning
 - All public API is re-exported from `lib.rs`
 - Snapshot tests write to `tests/snapshots/` for visual verification

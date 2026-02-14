@@ -1,3 +1,9 @@
+## 0.1.3 (2026-02-14)
+
+### Features
+
+- add format_command to GeneratorConfig
+
 ## 0.1.2 (2026-02-14)
 
 ### Fixes

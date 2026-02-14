@@ -1,3 +1,10 @@
+## 0.1.4 (2026-02-14)
+
+### Fixes
+
+- publish crate before git push to prevent cancellation
+- add Cargo.lock to versioned_files and --allow-dirty
+
 ## 0.1.3 (2026-02-14)
 
 ### Features

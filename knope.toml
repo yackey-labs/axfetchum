@@ -1,5 +1,5 @@
 [package]
-versioned_files = ["Cargo.toml"]
+versioned_files = ["Cargo.toml", "Cargo.lock"]
 changelog = "CHANGELOG.md"
 
 [gitea]
@@ -21,7 +21,7 @@ command = "git commit -m \"chore: prepare release $version\""
 # cancel this job, so cargo publish must complete first.
 [[workflows.steps]]
 type = "Command"
-command = "cargo publish --registry yauth --no-verify"
+command = "cargo publish --registry yauth --no-verify --allow-dirty"
 shell = true
 
 [[workflows.steps]]

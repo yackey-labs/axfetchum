@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
+use std::process::Command;
 
 use crate::types::{HttpMethod, RouteCollection, RouteDefinition};
 
@@ -24,6 +25,9 @@ pub struct GeneratorConfig {
     /// Import path prefix for types (relative from generated file to bindings dir).
     /// If empty, computed from bindings_dir relative to output_path.
     pub type_import_prefix: String,
+    /// Optional shell command to format the generated file (e.g., `"biome format --write"`).
+    /// The output file path is appended as the last argument.
+    pub format_command: Option<String>,
 }
 
 impl Default for GeneratorConfig {
@@ -37,6 +41,7 @@ impl Default for GeneratorConfig {
             options_interface_name: "ClientOptions".into(),
             default_credentials: "include".into(),
             type_import_prefix: String::new(),
+            format_command: None,
         }
     }
 }
@@ -50,6 +55,11 @@ pub enum CheckError {
     ReadError { path: String, error: std::io::Error },
     /// Generation itself failed.
     GenerateError(String),
+    /// The format command failed to execute.
+    FormatError {
+        command: String,
+        error: std::io::Error,
+    },
 }
 
 impl std::fmt::Display for CheckError {
@@ -66,6 +76,9 @@ impl std::fmt::Display for CheckError {
                 write!(f, "Failed to read '{path}': {error}")
             }
             Self::GenerateError(msg) => write!(f, "Generation error: {msg}"),
+            Self::FormatError { command, error } => {
+                write!(f, "Format command '{command}' failed: {error}")
+            }
         }
     }
 }
@@ -687,7 +700,40 @@ fn derive_type_name(factory_name: &str) -> String {
         .to_string()
 }
 
+/// Run a format command on the given file path.
+///
+/// The command string is split on whitespace: the first token is the program,
+/// remaining tokens are arguments, and `file_path` is appended as the final argument.
+fn run_format_command(format_command: &str, file_path: &str) -> Result<(), std::io::Error> {
+    let parts: Vec<&str> = format_command.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "format_command is empty",
+        ));
+    }
+
+    let output = Command::new(parts[0])
+        .args(&parts[1..])
+        .arg(file_path)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(std::io::Error::other(format!(
+            "format command '{}' exited with {}: {}",
+            format_command,
+            output.status,
+            stderr.trim()
+        )));
+    }
+
+    Ok(())
+}
+
 /// Generate the client and write it to a file.
+///
+/// If `config.format_command` is set, the format command is run on the output file after writing.
 pub fn generate_to_file(
     routes: &RouteCollection,
     config: &GeneratorConfig,
@@ -699,14 +745,62 @@ pub fn generate_to_file(
         std::fs::create_dir_all(parent)?;
     }
 
-    std::fs::write(&config.output_path, &content)
+    std::fs::write(&config.output_path, &content)?;
+
+    if let Some(ref cmd) = config.format_command {
+        run_format_command(cmd, &config.output_path)?;
+    }
+
+    Ok(())
 }
 
 /// Check if the generated output matches the committed file.
 ///
+/// When `config.format_command` is set, the generated output is written to a temporary file
+/// and formatted before comparing, so the check accounts for formatter changes.
+///
 /// Returns `Ok(())` if in sync, `Err(CheckError)` if not.
 pub fn check(routes: &RouteCollection, config: &GeneratorConfig) -> Result<(), CheckError> {
     let generated = generate(routes, config);
+
+    let expected = if let Some(ref cmd) = config.format_command {
+        // Write to a temp file, format it, then read back the formatted content
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let temp_path = std::env::temp_dir().join(format!(
+            "axum_ts_client_check_{}_{nanos}.ts",
+            std::process::id()
+        ));
+        let temp_path_str = temp_path.to_string_lossy().to_string();
+
+        std::fs::write(&temp_path, &generated).map_err(|e| CheckError::ReadError {
+            path: temp_path_str.clone(),
+            error: e,
+        })?;
+
+        let format_result =
+            run_format_command(cmd, &temp_path_str).map_err(|e| CheckError::FormatError {
+                command: cmd.clone(),
+                error: e,
+            });
+
+        if let Err(err) = format_result {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(err);
+        }
+
+        let formatted = std::fs::read_to_string(&temp_path).map_err(|e| CheckError::ReadError {
+            path: temp_path_str,
+            error: e,
+        })?;
+
+        let _ = std::fs::remove_file(&temp_path);
+        formatted
+    } else {
+        generated
+    };
 
     let existing =
         std::fs::read_to_string(&config.output_path).map_err(|e| CheckError::ReadError {
@@ -714,7 +808,7 @@ pub fn check(routes: &RouteCollection, config: &GeneratorConfig) -> Result<(), C
             error: e,
         })?;
 
-    if generated != existing {
+    if expected != existing {
         Err(CheckError::OutOfSync {
             path: config.output_path.clone(),
         })

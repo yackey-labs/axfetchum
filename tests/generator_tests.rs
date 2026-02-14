@@ -10,6 +10,7 @@ fn yauth_config() -> GeneratorConfig {
         options_interface_name: "YAuthClientOptions".into(),
         default_credentials: "include".into(),
         type_import_prefix: "../../../../bindings".into(),
+        format_command: None,
     }
 }
 
@@ -262,4 +263,116 @@ fn snapshot_yauth_style_output() {
     // Verify it can be re-read and matches
     let re_read = std::fs::read_to_string(snapshot_path).unwrap();
     assert_eq!(output, re_read);
+}
+
+#[test]
+fn generate_to_file_runs_format_command() {
+    let routes = sample_routes();
+    let dir = std::env::temp_dir().join("axum_ts_client_fmt_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let output_path = dir.join("generated.ts");
+
+    // Use sed to replace a known string, proving the formatter ran
+    let config = GeneratorConfig {
+        output_path: output_path.to_string_lossy().into(),
+        format_command: Some("sed -i s/Auto-generated/FORMATTED/".into()),
+        ..yauth_config()
+    };
+
+    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    assert!(
+        content.contains("FORMATTED"),
+        "format command should have replaced 'Auto-generated' with 'FORMATTED'"
+    );
+    assert!(
+        !content.contains("Auto-generated"),
+        "original text should have been replaced"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn check_passes_with_format_command() {
+    let routes = sample_routes();
+    let dir = std::env::temp_dir().join("axum_ts_client_fmt_check");
+    std::fs::create_dir_all(&dir).unwrap();
+    let output_path = dir.join("generated.ts");
+
+    let config = GeneratorConfig {
+        output_path: output_path.to_string_lossy().into(),
+        format_command: Some("sed -i s/Auto-generated/FORMATTED/".into()),
+        ..yauth_config()
+    };
+
+    // generate_to_file writes + formats
+    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+
+    // check should pass (generates to temp, formats, compares)
+    let result = axum_ts_client::check(&routes, &config);
+    assert!(
+        result.is_ok(),
+        "check should pass after generate_to_file with same format_command"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn check_fails_when_format_command_not_applied() {
+    let routes = sample_routes();
+    let dir = std::env::temp_dir().join("axum_ts_client_fmt_mismatch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let output_path = dir.join("generated.ts");
+
+    // Write unformatted output
+    let unformatted_config = GeneratorConfig {
+        output_path: output_path.to_string_lossy().into(),
+        format_command: None,
+        ..yauth_config()
+    };
+    axum_ts_client::generate_to_file(&routes, &unformatted_config).unwrap();
+
+    // Check with a format_command — the on-disk file is unformatted, so it should fail
+    let formatted_config = GeneratorConfig {
+        output_path: output_path.to_string_lossy().into(),
+        format_command: Some("sed -i s/Auto-generated/FORMATTED/".into()),
+        ..yauth_config()
+    };
+    let result = axum_ts_client::check(&routes, &formatted_config);
+    assert!(
+        result.is_err(),
+        "check should fail when on-disk file was not formatted"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn format_command_none_preserves_existing_behavior() {
+    let routes = sample_routes();
+    let dir = std::env::temp_dir().join("axum_ts_client_no_fmt");
+    std::fs::create_dir_all(&dir).unwrap();
+    let output_path = dir.join("generated.ts");
+
+    let config = GeneratorConfig {
+        output_path: output_path.to_string_lossy().into(),
+        format_command: None,
+        ..yauth_config()
+    };
+
+    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+
+    // Content should match raw generate() output exactly
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    let expected = generate(&routes, &config);
+    assert_eq!(content, expected);
+
+    // check should pass
+    let result = axum_ts_client::check(&routes, &config);
+    assert!(result.is_ok());
+
+    std::fs::remove_dir_all(&dir).ok();
 }

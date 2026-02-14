@@ -50,6 +50,7 @@ This crate uses only `std` — no `syn`, `quote`, `proc-macro2`. The macro uses 
 
 ## Conventions
 
+- **Always use Bun** when JS tooling is needed — never npm or yarn
 - **Conventional commits** for all commit messages — this directly drives automated versioning
 - All public API is re-exported from `lib.rs`
 - Snapshot tests write to `tests/snapshots/` for visual verification

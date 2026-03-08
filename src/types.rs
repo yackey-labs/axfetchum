@@ -30,7 +30,6 @@ impl std::fmt::Display for HttpMethod {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathParam {
     pub name: String,
-    pub position: usize,
 }
 
 /// Definition of a single API route.
@@ -114,20 +113,17 @@ impl<'a> IntoIterator for &'a RouteCollection {
 
 /// Extract path parameters from a route path string.
 ///
-/// For example, `/admin/users/{id}` returns `[PathParam { name: "id", position: 0 }]`.
+/// For example, `/admin/users/{id}` returns `[PathParam { name: "id" }]`.
 pub fn extract_path_params(path: &str) -> Vec<PathParam> {
-    let mut params = Vec::new();
-    let mut pos = 0;
-    for segment in path.split('/') {
-        if let Some(name) = segment.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-            params.push(PathParam {
-                name: name.to_string(),
-                position: pos,
-            });
-            pos += 1;
-        }
-    }
-    params
+    path.split('/')
+        .filter_map(|seg| {
+            seg.strip_prefix('{')
+                .and_then(|s| s.strip_suffix('}'))
+                .map(|name| PathParam {
+                    name: name.to_string(),
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -145,7 +141,6 @@ mod tests {
         let params = extract_path_params("/admin/users/{id}");
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].name, "id");
-        assert_eq!(params[0].position, 0);
     }
 
     #[test]

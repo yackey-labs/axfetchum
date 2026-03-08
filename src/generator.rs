@@ -1,9 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as FmtWrite;
-use std::path::Path;
+use std::fmt::Write;
+use std::path::{Component, Path};
 use std::process::Command;
 
 use crate::types::{HttpMethod, RouteCollection, RouteDefinition};
+
+/// Shorthand for `writeln!(...).unwrap()` — writing to `String` is infallible.
+macro_rules! w {
+    ($dst:expr) => { writeln!($dst).unwrap() };
+    ($dst:expr, $($arg:tt)*) => { writeln!($dst, $($arg)*).unwrap() };
+}
 
 /// Configuration for the TypeScript client generator.
 #[derive(Debug, Clone)]
@@ -85,22 +91,64 @@ impl std::fmt::Display for CheckError {
 
 impl std::error::Error for CheckError {}
 
-/// Collect all unique type names referenced in the routes.
-fn collect_type_names(routes: &RouteCollection) -> BTreeSet<String> {
-    let mut types = BTreeSet::new();
-    for route in routes {
-        if let Some(ref t) = route.body_type {
-            types.insert(t.clone());
-        }
-        if let Some(ref t) = route.response_type {
-            types.insert(t.clone());
-        }
-        if let Some(ref t) = route.query_type {
-            types.insert(t.clone());
-        }
+// ---------------------------------------------------------------------------
+// Type helpers
+// ---------------------------------------------------------------------------
+
+const PRIMITIVES: &[&str] = &[
+    "String", "&str", "Uuid", "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32",
+    "f64", "usize", "isize",
+];
+
+/// Recursively strip `Vec<>`/`Option<>` wrappers, returning the innermost type name.
+fn unwrap_inner(rust_type: &str) -> &str {
+    let t = rust_type.trim();
+    if let Some(inner) = t
+        .strip_prefix("Vec<")
+        .or_else(|| t.strip_prefix("Option<"))
+        .and_then(|s| s.strip_suffix('>'))
+    {
+        return unwrap_inner(inner);
     }
-    types
+    t
 }
+
+/// Convert a Rust type name (from `stringify!`) to a TypeScript type string.
+fn rust_type_to_ts(rust_type: &str) -> String {
+    let t = rust_type.trim();
+    if let Some(inner) = t.strip_prefix("Vec<").and_then(|s| s.strip_suffix('>')) {
+        return format!("{}[]", rust_type_to_ts(inner));
+    }
+    if let Some(inner) = t.strip_prefix("Option<").and_then(|s| s.strip_suffix('>')) {
+        return format!("{} | null", rust_type_to_ts(inner));
+    }
+    match t {
+        "String" | "&str" | "Uuid" => "string".into(),
+        "bool" => "boolean".into(),
+        _ if PRIMITIVES.contains(&t) => "number".into(),
+        _ => t.to_string(),
+    }
+}
+
+/// Check if a type is a primitive (doesn't need an import).
+#[cfg(test)]
+fn is_primitive_type(rust_type: &str) -> bool {
+    PRIMITIVES.contains(&unwrap_inner(rust_type))
+}
+
+/// Get the base custom type name for imports (unwrapping Vec/Option, skipping primitives).
+fn base_type_name(rust_type: &str) -> Option<&str> {
+    let base = unwrap_inner(rust_type);
+    if PRIMITIVES.contains(&base) {
+        None
+    } else {
+        Some(base)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Path and parameter helpers
+// ---------------------------------------------------------------------------
 
 /// Compute the import path prefix for type imports.
 fn compute_import_prefix(config: &GeneratorConfig) -> String {
@@ -108,158 +156,37 @@ fn compute_import_prefix(config: &GeneratorConfig) -> String {
         return config.type_import_prefix.clone();
     }
 
-    // Compute relative path from output file to bindings dir
     let output_dir = Path::new(&config.output_path)
         .parent()
         .unwrap_or(Path::new("."));
     let bindings = Path::new(&config.bindings_dir);
 
-    // Simple relative path computation:
-    // If output is at ./packages/client/src/generated.ts and bindings at ./bindings,
-    // we need ../../../bindings
-    // For simplicity, if both are relative, compute manually
-    let output_str = output_dir.to_string_lossy();
-    let bindings_str = bindings.to_string_lossy();
-
-    // Strip leading ./ for comparison
-    let output_clean = output_str.strip_prefix("./").unwrap_or(&output_str);
-    let bindings_clean = bindings_str.strip_prefix("./").unwrap_or(&bindings_str);
-
-    // Count depth of output directory
-    let output_parts: Vec<&str> = if output_clean.is_empty() {
-        vec![]
-    } else {
-        output_clean.split('/').collect()
-    };
-
-    // Find common prefix
-    let binding_parts: Vec<&str> = if bindings_clean.is_empty() {
-        vec![]
-    } else {
-        bindings_clean.split('/').collect()
-    };
-
-    let mut common = 0;
-    for (a, b) in output_parts.iter().zip(binding_parts.iter()) {
-        if a == b {
-            common += 1;
-        } else {
-            break;
-        }
+    fn normal_parts(p: &Path) -> Vec<&str> {
+        p.components()
+            .filter_map(|c| match c {
+                Component::Normal(s) => s.to_str(),
+                _ => None,
+            })
+            .collect()
     }
 
-    let ups = output_parts.len() - common;
-    let remaining = &binding_parts[common..];
+    let out_parts = normal_parts(output_dir);
+    let bind_parts = normal_parts(bindings);
 
-    let mut prefix = String::new();
-    if ups == 0 {
-        prefix.push_str("./");
+    let common = out_parts
+        .iter()
+        .zip(&bind_parts)
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let ups = out_parts.len() - common;
+    let mut prefix = if ups == 0 {
+        "./".to_string()
     } else {
-        for _ in 0..ups {
-            prefix.push_str("../");
-        }
-    }
-    prefix.push_str(&remaining.join("/"));
-
+        "../".repeat(ups)
+    };
+    prefix.push_str(&bind_parts[common..].join("/"));
     prefix
-}
-
-/// Convert a Rust type name (from stringify!) to a TypeScript type string.
-///
-/// This handles the route signature types only — the actual type definitions
-/// are generated by ts-rs separately.
-fn rust_type_to_ts(rust_type: &str) -> String {
-    let trimmed = rust_type.trim();
-
-    // Handle Vec<T> -> T[]
-    if let Some(inner) = trimmed
-        .strip_prefix("Vec<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        let inner_ts = rust_type_to_ts(inner);
-        return format!("{inner_ts}[]");
-    }
-
-    // Handle Option<T> -> T | null
-    if let Some(inner) = trimmed
-        .strip_prefix("Option<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        let inner_ts = rust_type_to_ts(inner);
-        return format!("{inner_ts} | null");
-    }
-
-    // Primitive mappings
-    match trimmed {
-        "String" | "&str" | "Uuid" => "string".into(),
-        "bool" => "boolean".into(),
-        "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "usize"
-        | "isize" => "number".into(),
-        _ => trimmed.to_string(),
-    }
-}
-
-/// Check if a type is a primitive (doesn't need an import).
-fn is_primitive_type(rust_type: &str) -> bool {
-    let trimmed = rust_type.trim();
-
-    // Unwrap Vec/Option
-    if let Some(inner) = trimmed
-        .strip_prefix("Vec<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        return is_primitive_type(inner);
-    }
-    if let Some(inner) = trimmed
-        .strip_prefix("Option<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        return is_primitive_type(inner);
-    }
-
-    matches!(
-        trimmed,
-        "String"
-            | "&str"
-            | "Uuid"
-            | "bool"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "f32"
-            | "f64"
-            | "usize"
-            | "isize"
-    )
-}
-
-/// Extract the base custom type name for imports (unwrapping Vec/Option).
-fn base_type_name(rust_type: &str) -> Option<String> {
-    let trimmed = rust_type.trim();
-
-    if let Some(inner) = trimmed
-        .strip_prefix("Vec<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        return base_type_name(inner);
-    }
-    if let Some(inner) = trimmed
-        .strip_prefix("Option<")
-        .and_then(|s| s.strip_suffix('>'))
-    {
-        return base_type_name(inner);
-    }
-
-    if is_primitive_type(trimmed) {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 /// Build the path template string for TypeScript.
@@ -269,8 +196,6 @@ fn build_path_template(path: &str) -> String {
     if !path.contains('{') {
         return format!("\"{path}\"");
     }
-
-    // Replace {param} with ${param} for template literals
     let mut template = String::new();
     for ch in path.chars() {
         if ch == '{' {
@@ -279,54 +204,39 @@ fn build_path_template(path: &str) -> String {
             template.push(ch);
         }
     }
-
     format!("`{template}`")
 }
 
 /// Generate a function's parameter list for a route.
 fn generate_params(route: &RouteDefinition) -> String {
     let mut params = Vec::new();
-
-    // Path params come first
     for param in &route.path_params {
         params.push(format!("{}: string", param.name));
     }
-
-    // Body param
     if let Some(ref body_type) = route.body_type {
-        let ts_type = rust_type_to_ts(body_type);
-        params.push(format!("body: {ts_type}"));
+        params.push(format!("body: {}", rust_type_to_ts(body_type)));
     }
-
-    // Query param
     if let Some(ref query_type) = route.query_type {
-        let ts_type = rust_type_to_ts(query_type);
-        params.push(format!("query?: {ts_type}"));
+        params.push(format!("query?: {}", rust_type_to_ts(query_type)));
     }
-
     params.join(", ")
 }
 
 /// Generate the request options object literal for a route.
 fn generate_request_options(route: &RouteDefinition) -> String {
     let mut opts = Vec::new();
-
     if route.method != HttpMethod::Get {
         opts.push(format!("method: \"{}\"", route.method.as_str()));
     }
-
     if route.auth {
         opts.push("auth: true".into());
     }
-
     if route.body_type.is_some() {
         opts.push("body".into());
     }
-
     if route.query_type.is_some() {
         opts.push("query".into());
     }
-
     if opts.is_empty() {
         String::new()
     } else {
@@ -334,78 +244,160 @@ fn generate_request_options(route: &RouteDefinition) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Template constants for static TypeScript blocks
+// ---------------------------------------------------------------------------
+
+const ERROR_CLASS: &str = r#"export class __ERROR__ extends Error {
+  constructor(message: string, public status: number, public body?: unknown) {
+    super(message);
+    this.name = "__ERROR__";
+  }
+}
+"#;
+
+const OPTIONS_INTERFACE: &str = r#"export interface __OPTS__ {
+  baseUrl: string;
+  getToken?: () => Promise<string | null>;
+  credentials?: RequestCredentials;
+  fetch?: typeof fetch;
+  onError?: (error: __ERROR__) => void;
+}
+"#;
+
+const REQUEST_OPTIONS_TYPE: &str = "\
+type RequestOptions = {
+  method?: string;
+  body?: unknown;
+  query?: Record<string, unknown>;
+  auth?: boolean;
+};
+";
+
+const REQUEST_HELPER: &str = r#"function createRequest(options: __OPTS__) {
+  const { baseUrl, credentials = "__CREDS__" } = options;
+  const fetchFn = options.fetch ?? globalThis.fetch;
+
+  async function request<T>(
+    path: string,
+    opts: RequestOptions = {},
+  ): Promise<T> {
+    const { method = "GET", body, query, auth } = opts;
+
+    let url = `${baseUrl}${path}`;
+    if (query) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined && value !== null) {
+          params.set(key, String(value));
+        }
+      }
+      const qs = params.toString();
+      if (qs) url += `?${qs}`;
+    }
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+    if (auth && options.getToken) {
+      const token = await options.getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const response = await fetchFn(url, {
+      method,
+      credentials,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      let message: string;
+      let errorBody: unknown;
+      try {
+        const json = JSON.parse(text);
+        message = json.error ?? json.message ?? text;
+        errorBody = json;
+      } catch {
+        message = text;
+      }
+      const error = new __ERROR__(message, response.status, errorBody);
+      if (options.onError) options.onError(error);
+      throw error;
+    }
+
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
+  }
+
+  return request;
+}
+"#;
+
+// ---------------------------------------------------------------------------
+// Code generation
+// ---------------------------------------------------------------------------
+
 /// Generate the full TypeScript client source code.
 pub fn generate(routes: &RouteCollection, config: &GeneratorConfig) -> String {
     let mut out = String::new();
 
     // Header
-    writeln!(out, "// Auto-generated by axum-ts-client. Do not edit.").unwrap();
-    writeln!(out).unwrap();
+    w!(out, "// Auto-generated by axum-ts-client. Do not edit.");
+    w!(out);
 
-    // Collect and generate type imports
-    let type_names = collect_type_names(routes);
+    // Collect and emit type imports (single pass, no intermediate collection)
     let import_prefix = compute_import_prefix(config);
-
-    let custom_types: BTreeSet<String> = type_names
+    let custom_types: BTreeSet<&str> = routes
         .iter()
-        .filter_map(|t| base_type_name(t))
+        .flat_map(|r| {
+            [
+                r.body_type.as_deref(),
+                r.response_type.as_deref(),
+                r.query_type.as_deref(),
+            ]
+        })
+        .flatten()
+        .filter_map(base_type_name)
         .collect();
 
     for type_name in &custom_types {
-        writeln!(
+        w!(
             out,
             "import type {{ {type_name} }} from \"{import_prefix}/{type_name}\";"
-        )
-        .unwrap();
+        );
     }
-
     if !custom_types.is_empty() {
-        writeln!(out).unwrap();
+        w!(out);
     }
 
-    // Error class
+    // Static blocks via template substitution
     let error_name = &config.error_class_name;
-    writeln!(out, "export class {error_name} extends Error {{").unwrap();
-    writeln!(
-        out,
-        "  constructor(message: string, public status: number, public body?: unknown) {{"
-    )
-    .unwrap();
-    writeln!(out, "    super(message);").unwrap();
-    writeln!(out, "    this.name = \"{error_name}\";").unwrap();
-    writeln!(out, "  }}").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
-
-    // Options interface
     let opts_name = &config.options_interface_name;
-    writeln!(out, "export interface {opts_name} {{").unwrap();
-    writeln!(out, "  baseUrl: string;").unwrap();
-    writeln!(out, "  getToken?: () => Promise<string | null>;").unwrap();
-    writeln!(out, "  credentials?: RequestCredentials;").unwrap();
-    writeln!(out, "  fetch?: typeof fetch;").unwrap();
-    writeln!(out, "  onError?: (error: {error_name}) => void;").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    let default_creds = &config.default_credentials;
 
-    // Internal request options type
-    writeln!(out, "type RequestOptions = {{").unwrap();
-    writeln!(out, "  method?: string;").unwrap();
-    writeln!(out, "  body?: unknown;").unwrap();
-    writeln!(out, "  query?: Record<string, unknown>;").unwrap();
-    writeln!(out, "  auth?: boolean;").unwrap();
-    writeln!(out, "}};").unwrap();
-    writeln!(out).unwrap();
+    let substitute = |template: &str| -> String {
+        template
+            .replace("__ERROR__", error_name)
+            .replace("__OPTS__", opts_name)
+            .replace("__CREDS__", default_creds)
+    };
 
-    // Request helper
-    generate_request_helper(&mut out, config);
+    out.push_str(&substitute(ERROR_CLASS));
+    w!(out);
+    out.push_str(&substitute(OPTIONS_INTERFACE));
+    w!(out);
+    out.push_str(REQUEST_OPTIONS_TYPE);
+    w!(out);
+    out.push_str(&substitute(REQUEST_HELPER));
+    w!(out);
 
     // Factory function
     let factory = &config.factory_name;
-    writeln!(out, "export function {factory}(options: {opts_name}) {{").unwrap();
-    writeln!(out, "  const request = createRequest(options);").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "  return {{").unwrap();
+    w!(out, "export function {factory}(options: {opts_name}) {{");
+    w!(out, "  const request = createRequest(options);");
+    w!(out);
+    w!(out, "  return {{");
 
     if config.enable_groups {
         generate_grouped_routes(&mut out, routes);
@@ -413,130 +405,22 @@ pub fn generate(routes: &RouteCollection, config: &GeneratorConfig) -> String {
         generate_flat_routes(&mut out, routes);
     }
 
-    writeln!(out, "  }};").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
+    w!(out, "  }};");
+    w!(out, "}}");
+    w!(out);
 
     // Type export
-    writeln!(
+    let type_name = derive_type_name(factory);
+    w!(
         out,
-        "export type {} = ReturnType<typeof {}>;",
-        derive_type_name(factory),
-        factory
-    )
-    .unwrap();
+        "export type {type_name} = ReturnType<typeof {factory}>;"
+    );
 
     out
 }
 
-/// Generate the internal `createRequest` helper function.
-fn generate_request_helper(out: &mut String, config: &GeneratorConfig) {
-    let error_name = &config.error_class_name;
-    let opts_name = &config.options_interface_name;
-    let default_creds = &config.default_credentials;
-
-    writeln!(out, "function createRequest(options: {opts_name}) {{").unwrap();
-    writeln!(
-        out,
-        "  const {{ baseUrl, credentials = \"{default_creds}\" }} = options;"
-    )
-    .unwrap();
-    writeln!(out, "  const fetchFn = options.fetch ?? globalThis.fetch;").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "  async function request<T>(").unwrap();
-    writeln!(out, "    path: string,").unwrap();
-    writeln!(out, "    opts: RequestOptions = {{}},").unwrap();
-    writeln!(out, "  ): Promise<T> {{").unwrap();
-    writeln!(
-        out,
-        "    const {{ method = \"GET\", body, query, auth }} = opts;"
-    )
-    .unwrap();
-    writeln!(out).unwrap();
-
-    // Build URL with query params
-    writeln!(out, "    let url = `${{baseUrl}}${{path}}`;").unwrap();
-    writeln!(out, "    if (query) {{").unwrap();
-    writeln!(out, "      const params = new URLSearchParams();").unwrap();
-    writeln!(
-        out,
-        "      for (const [key, value] of Object.entries(query)) {{"
-    )
-    .unwrap();
-    writeln!(out, "        if (value !== undefined && value !== null) {{").unwrap();
-    writeln!(out, "          params.set(key, String(value));").unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out, "      }}").unwrap();
-    writeln!(out, "      const qs = params.toString();").unwrap();
-    writeln!(out, "      if (qs) url += `?${{qs}}`;").unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out).unwrap();
-
-    // Build headers
-    writeln!(
-        out,
-        "    const headers: Record<string, string> = {{ \"Content-Type\": \"application/json\" }};"
-    )
-    .unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "    if (auth && options.getToken) {{").unwrap();
-    writeln!(out, "      const token = await options.getToken();").unwrap();
-    writeln!(
-        out,
-        "      if (token) headers[\"Authorization\"] = `Bearer ${{token}}`;"
-    )
-    .unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out).unwrap();
-
-    // Fetch
-    writeln!(out, "    const response = await fetchFn(url, {{").unwrap();
-    writeln!(out, "      method,").unwrap();
-    writeln!(out, "      credentials,").unwrap();
-    writeln!(out, "      headers,").unwrap();
-    writeln!(out, "      body: body ? JSON.stringify(body) : undefined,").unwrap();
-    writeln!(out, "    }});").unwrap();
-    writeln!(out).unwrap();
-
-    // Error handling
-    writeln!(out, "    if (!response.ok) {{").unwrap();
-    writeln!(out, "      const text = await response.text();").unwrap();
-    writeln!(out, "      let message: string;").unwrap();
-    writeln!(out, "      let errorBody: unknown;").unwrap();
-    writeln!(out, "      try {{").unwrap();
-    writeln!(out, "        const json = JSON.parse(text);").unwrap();
-    writeln!(out, "        message = json.error ?? json.message ?? text;").unwrap();
-    writeln!(out, "        errorBody = json;").unwrap();
-    writeln!(out, "      }} catch {{").unwrap();
-    writeln!(out, "        message = text;").unwrap();
-    writeln!(out, "      }}").unwrap();
-    writeln!(
-        out,
-        "      const error = new {error_name}(message, response.status, errorBody);"
-    )
-    .unwrap();
-    writeln!(out, "      if (options.onError) options.onError(error);").unwrap();
-    writeln!(out, "      throw error;").unwrap();
-    writeln!(out, "    }}").unwrap();
-    writeln!(out).unwrap();
-
-    // Parse response
-    writeln!(out, "    const text = await response.text();").unwrap();
-    writeln!(
-        out,
-        "    return (text ? JSON.parse(text) : undefined) as T;"
-    )
-    .unwrap();
-    writeln!(out, "  }}").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "  return request;").unwrap();
-    writeln!(out, "}}").unwrap();
-    writeln!(out).unwrap();
-}
-
 /// Generate routes organized into groups (nested objects).
 fn generate_grouped_routes(out: &mut String, routes: &RouteCollection) {
-    // Separate ungrouped and grouped routes
     let mut ungrouped: Vec<&RouteDefinition> = Vec::new();
     let mut groups: BTreeMap<String, Vec<&RouteDefinition>> = BTreeMap::new();
 
@@ -547,25 +431,23 @@ fn generate_grouped_routes(out: &mut String, routes: &RouteCollection) {
         }
     }
 
-    // Ungrouped routes first (indent = 4 spaces)
     for route in &ungrouped {
         write!(out, "    ").unwrap();
         generate_route_method(out, route, 4);
-        writeln!(out, ",").unwrap();
+        w!(out, ",");
     }
 
-    // Grouped routes (indent = 6 spaces)
     for (group_name, group_routes) in &groups {
         if !ungrouped.is_empty() || groups.keys().next() != Some(group_name) {
-            writeln!(out).unwrap();
+            w!(out);
         }
-        writeln!(out, "    {group_name}: {{").unwrap();
+        w!(out, "    {group_name}: {{");
         for route in group_routes {
             write!(out, "      ").unwrap();
             generate_route_method(out, route, 6);
-            writeln!(out, ",").unwrap();
+            w!(out, ",");
         }
-        writeln!(out, "    }},").unwrap();
+        w!(out, "    }},");
     }
 }
 
@@ -574,30 +456,23 @@ fn generate_flat_routes(out: &mut String, routes: &RouteCollection) {
     for route in routes {
         write!(out, "    ").unwrap();
         generate_route_method(out, route, 4);
-        writeln!(out, ",").unwrap();
+        w!(out, ",");
     }
 }
 
 /// Generate a single route method.
-///
-/// `indent` is the current indentation level in spaces (for continuation lines).
 fn generate_route_method(out: &mut String, route: &RouteDefinition, indent: usize) {
-    let name = &route.name;
-    let params = generate_params(route);
-    let path_template = build_path_template(&route.path);
-    let cont_indent = " ".repeat(indent + 2); // continuation indentation
-
     if route.redirect {
-        // Redirect routes generate URL-builder functions
-        generate_redirect_method(out, route, name, &params, &path_template, indent);
+        generate_redirect_method(out, route, indent);
     } else {
-        // Normal fetch routes
+        let name = &route.name;
+        let params = generate_params(route);
+        let path_template = build_path_template(&route.path);
         let return_type = route
             .response_type
             .as_ref()
             .map(|t| rust_type_to_ts(t))
             .unwrap_or_else(|| "void".into());
-
         let opts = generate_request_options(route);
 
         if params.is_empty() {
@@ -607,9 +482,10 @@ fn generate_route_method(out: &mut String, route: &RouteDefinition, indent: usiz
             )
             .unwrap();
         } else {
+            let pad = " ".repeat(indent + 2);
             write!(
                 out,
-                "{name}: ({params}) =>\n{cont_indent}request<{return_type}>({path_template}{opts})"
+                "{name}: ({params}) =>\n{pad}request<{return_type}>({path_template}{opts})"
             )
             .unwrap();
         }
@@ -617,72 +493,48 @@ fn generate_route_method(out: &mut String, route: &RouteDefinition, indent: usiz
 }
 
 /// Generate a redirect route (URL-builder, not fetch).
-fn generate_redirect_method(
-    out: &mut String,
-    route: &RouteDefinition,
-    name: &str,
-    params: &str,
-    path_template: &str,
-    indent: usize,
-) {
+fn generate_redirect_method(out: &mut String, route: &RouteDefinition, indent: usize) {
+    let name = &route.name;
+    let path_template = build_path_template(&route.path);
+    let path_inner = &path_template[1..path_template.len() - 1];
     let pad = " ".repeat(indent);
     let pad2 = " ".repeat(indent + 2);
     let pad4 = " ".repeat(indent + 4);
 
-    // For redirect routes with query params, build URL with optional query string
-    if route.query_type.is_some() {
-        let query_ts = route
-            .query_type
-            .as_ref()
-            .map(|t| rust_type_to_ts(t))
-            .unwrap_or_default();
-
-        // Rebuild params without query (which was already added by generate_params)
+    if let Some(ref query_type) = route.query_type {
+        let query_ts = rust_type_to_ts(query_type);
         let mut fn_params = Vec::new();
         for param in &route.path_params {
             fn_params.push(format!("{}: string", param.name));
         }
         fn_params.push(format!("query?: {query_ts}"));
-
         let all_params = fn_params.join(", ");
 
-        writeln!(out, "{name}: ({all_params}) => {{").unwrap();
-        writeln!(
-            out,
-            "{pad2}let url = `${{options.baseUrl}}{}`;\n{pad2}if (query) {{",
-            &path_template[1..path_template.len() - 1] // strip outer quotes/backticks
-        )
-        .unwrap();
-        writeln!(out, "{pad4}const params = new URLSearchParams();").unwrap();
-        writeln!(
+        w!(out, "{name}: ({all_params}) => {{");
+        w!(out, "{pad2}let url = `${{options.baseUrl}}{path_inner}`;");
+        w!(out, "{pad2}if (query) {{");
+        w!(out, "{pad4}const params = new URLSearchParams();");
+        w!(
             out,
             "{pad4}for (const [key, value] of Object.entries(query)) {{"
-        )
-        .unwrap();
-        writeln!(
+        );
+        w!(
             out,
             "{pad4}  if (value !== undefined && value !== null) params.set(key, String(value));"
-        )
-        .unwrap();
-        writeln!(out, "{pad4}}}").unwrap();
-        writeln!(out, "{pad4}const qs = params.toString();").unwrap();
-        writeln!(out, "{pad4}if (qs) url += `?${{qs}}`;").unwrap();
-        writeln!(out, "{pad2}}}").unwrap();
+        );
+        w!(out, "{pad4}}}");
+        w!(out, "{pad4}const qs = params.toString();");
+        w!(out, "{pad4}if (qs) url += `?${{qs}}`;");
+        w!(out, "{pad2}}}");
         write!(out, "{pad2}return url;\n{pad}}}").unwrap();
     } else {
-        // Simple URL builder with just path params
+        let params = generate_params(route);
         if params.is_empty() {
-            write!(
-                out,
-                "{name}: () => `${{options.baseUrl}}{}`",
-                &path_template[1..path_template.len() - 1]
-            )
-            .unwrap();
+            write!(out, "{name}: () => `${{options.baseUrl}}{path_inner}`").unwrap();
         } else {
             write!(
                 out,
-                "{name}: ({params}) => `${{options.baseUrl}}{}`",
-                &path_template[1..path_template.len() - 1]
+                "{name}: ({params}) => `${{options.baseUrl}}{path_inner}`"
             )
             .unwrap();
         }
@@ -692,7 +544,6 @@ fn generate_redirect_method(
 /// Derive a type name from a factory function name.
 ///
 /// `createYAuthClient` -> `YAuthClient`
-/// `createApiClient` -> `ApiClient`
 fn derive_type_name(factory_name: &str) -> String {
     factory_name
         .strip_prefix("create")
@@ -700,10 +551,11 @@ fn derive_type_name(factory_name: &str) -> String {
         .to_string()
 }
 
+// ---------------------------------------------------------------------------
+// File I/O and check
+// ---------------------------------------------------------------------------
+
 /// Run a format command on the given file path.
-///
-/// The command string is split on whitespace: the first token is the program,
-/// remaining tokens are arguments, and `file_path` is appended as the final argument.
 fn run_format_command(format_command: &str, file_path: &str) -> Result<(), std::io::Error> {
     let parts: Vec<&str> = format_command.split_whitespace().collect();
     if parts.is_empty() {
@@ -740,7 +592,6 @@ pub fn generate_to_file(
 ) -> Result<(), std::io::Error> {
     let content = generate(routes, config);
 
-    // Ensure parent directory exists
     if let Some(parent) = Path::new(&config.output_path).parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -754,6 +605,15 @@ pub fn generate_to_file(
     Ok(())
 }
 
+/// RAII guard that removes a temp file on drop.
+struct TempFile(std::path::PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Check if the generated output matches the committed file.
 ///
 /// When `config.format_command` is set, the generated output is written to a temporary file
@@ -764,40 +624,31 @@ pub fn check(routes: &RouteCollection, config: &GeneratorConfig) -> Result<(), C
     let generated = generate(routes, config);
 
     let expected = if let Some(ref cmd) = config.format_command {
-        // Write to a temp file, format it, then read back the formatted content
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let temp_path = std::env::temp_dir().join(format!(
+        let temp = TempFile(std::env::temp_dir().join(format!(
             "axum_ts_client_check_{}_{nanos}.ts",
             std::process::id()
-        ));
-        let temp_path_str = temp_path.to_string_lossy().to_string();
+        )));
+        let temp_str = temp.0.to_string_lossy().to_string();
 
-        std::fs::write(&temp_path, &generated).map_err(|e| CheckError::ReadError {
-            path: temp_path_str.clone(),
+        std::fs::write(&temp.0, &generated).map_err(|e| CheckError::ReadError {
+            path: temp_str.clone(),
             error: e,
         })?;
 
-        let format_result =
-            run_format_command(cmd, &temp_path_str).map_err(|e| CheckError::FormatError {
-                command: cmd.clone(),
-                error: e,
-            });
-
-        if let Err(err) = format_result {
-            let _ = std::fs::remove_file(&temp_path);
-            return Err(err);
-        }
-
-        let formatted = std::fs::read_to_string(&temp_path).map_err(|e| CheckError::ReadError {
-            path: temp_path_str,
+        run_format_command(cmd, &temp_str).map_err(|e| CheckError::FormatError {
+            command: cmd.clone(),
             error: e,
         })?;
 
-        let _ = std::fs::remove_file(&temp_path);
-        formatted
+        std::fs::read_to_string(&temp.0).map_err(|e| CheckError::ReadError {
+            path: temp_str,
+            error: e,
+        })?
+        // temp file auto-removed on drop
     } else {
         generated
     };
@@ -891,19 +742,10 @@ mod tests {
     #[test]
     fn test_base_type_name() {
         assert_eq!(base_type_name("String"), None);
-        assert_eq!(
-            base_type_name("RegisterRequest"),
-            Some("RegisterRequest".into())
-        );
-        assert_eq!(
-            base_type_name("Vec<UserResponse>"),
-            Some("UserResponse".into())
-        );
+        assert_eq!(base_type_name("RegisterRequest"), Some("RegisterRequest"));
+        assert_eq!(base_type_name("Vec<UserResponse>"), Some("UserResponse"));
         assert_eq!(base_type_name("Vec<String>"), None);
-        assert_eq!(
-            base_type_name("Option<UserResponse>"),
-            Some("UserResponse".into())
-        );
+        assert_eq!(base_type_name("Option<UserResponse>"), Some("UserResponse"));
     }
 
     #[test]

@@ -2,6 +2,11 @@
 versioned_files = ["Cargo.toml", "Cargo.lock"]
 changelog = "CHANGELOG.md"
 
+[package.extra_changelog_sections]
+refactor = "Refactoring"
+perf = "Performance"
+docs = "Documentation"
+
 [gitea]
 owner = "yackey-cloud"
 repo = "axum-ts-client"

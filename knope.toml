@@ -1,11 +1,11 @@
 [package]
 versioned_files = ["Cargo.toml", "Cargo.lock"]
 changelog = "CHANGELOG.md"
-
-[package.extra_changelog_sections]
-refactor = "Refactoring"
-perf = "Performance"
-docs = "Documentation"
+extra_changelog_sections = [
+    { name = "Refactoring", types = ["refactor"] },
+    { name = "Performance", types = ["perf"] },
+    { name = "Documentation", types = ["docs"] },
+]
 
 [gitea]
 owner = "yackey-cloud"

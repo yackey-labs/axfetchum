@@ -1,3 +1,10 @@
+## 0.1.5 (2026-03-08)
+
+### Fixes
+
+- surface release failures and include refactor commits
+- correct knope extra_changelog_sections format
+
 ## 0.1.4 (2026-02-14)
 
 ### Fixes

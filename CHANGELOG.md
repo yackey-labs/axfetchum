@@ -1,3 +1,9 @@
+## 0.1.6 (2026-03-15)
+
+### Fixes
+
+- resolve fetch at call time for OTel instrumentation compatibility
+
 ## 0.1.5 (2026-03-08)
 
 ### Fixes

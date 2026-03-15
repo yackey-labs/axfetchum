@@ -42,13 +42,15 @@ type RequestOptions = {
 
 function createRequest(options: YAuthClientOptions) {
   const { baseUrl, credentials = "include" } = options;
-  const fetchFn = options.fetch ?? globalThis.fetch;
-
   async function request<T>(
     path: string,
     opts: RequestOptions = {},
   ): Promise<T> {
     const { method = "GET", body, query, auth } = opts;
+    // Resolve fetch at call time (not at client creation) so OTel
+    // instrumentation patches are picked up even when the client
+    // module is imported before telemetry initializes.
+    const fetchFn = options.fetch ?? globalThis.fetch;
 
     let url = `${baseUrl}${path}`;
     if (query) {

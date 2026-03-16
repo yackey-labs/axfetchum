@@ -37,6 +37,12 @@ mod generator;
 mod macros;
 mod types;
 
+#[cfg(feature = "axum")]
+mod builder;
+
 // Re-export public API
 pub use generator::{CheckError, GeneratorConfig, check, generate, generate_to_file};
 pub use types::{HttpMethod, PathParam, RouteCollection, RouteDefinition, extract_path_params};
+
+#[cfg(feature = "axum")]
+pub use builder::{ApiRouter, RouteBuilder};

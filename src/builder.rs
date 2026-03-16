@@ -1,0 +1,472 @@
+//! Axum router builder that collects route metadata alongside real routing.
+//!
+//! This module provides [`ApiRouter`], a wrapper around [`axum::Router`] that
+//! builds both an Axum router and a [`RouteCollection`] from a single definition.
+//! Requires the `axum` feature.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use axum_ts_client::ApiRouter;
+//!
+//! // Handler names auto-convert to camelCase client methods.
+//! // list_users → listUsers, create_user → createUser
+//! let (router, routes) = ApiRouter::<AppState>::new()
+//!     .group("users")
+//!     .get("/users", list_users)
+//!         .response::<Vec<UserResponse>>()
+//!         .auth()
+//!         .done()
+//!     .post("/users", create_user)
+//!         .json::<CreateUserRequest, UserResponse>()
+//!         .auth()
+//!         .done()
+//!     .get("/users/{id}", get_user)
+//!         .response::<UserResponse>()
+//!         .as_("getById")  // override auto-name when needed
+//!     .build();
+//! ```
+
+use axum::Router;
+use axum::handler::Handler;
+use axum::routing::{self, MethodRouter};
+
+use crate::types::{HttpMethod, RouteCollection, RouteDefinition};
+
+// ---------------------------------------------------------------------------
+// String helpers
+// ---------------------------------------------------------------------------
+
+/// Strip module paths from `std::any::type_name` output.
+///
+/// `"alloc::vec::Vec<myapp::types::UserResponse>"` → `"Vec<UserResponse>"`
+fn strip_module_paths(type_name: &str) -> String {
+    let mut result = String::with_capacity(type_name.len());
+    let mut last_colon_end = 0;
+    let bytes = type_name.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b':' && i + 1 < bytes.len() && bytes[i + 1] == b':' {
+            last_colon_end = i + 2;
+            i += 2;
+        } else if bytes[i] == b'<' || bytes[i] == b'>' || bytes[i] == b',' || bytes[i] == b' ' {
+            if last_colon_end <= i {
+                result.push_str(&type_name[last_colon_end..i]);
+            }
+            result.push(bytes[i] as char);
+            last_colon_end = i + 1;
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    if last_colon_end <= bytes.len() {
+        result.push_str(&type_name[last_colon_end..]);
+    }
+
+    result
+}
+
+/// Get the stripped type name for a Rust type.
+fn type_string<T: 'static>() -> String {
+    strip_module_paths(std::any::type_name::<T>())
+}
+
+/// Extract the function name from `std::any::type_name` on a function item.
+///
+/// `"myapp::plugins::email_password::register"` → `"register"`
+fn handler_name_from_type_name(type_name: &str) -> &str {
+    // Function type names can have suffixes like `::{{closure}}`, strip those.
+    type_name
+        .rsplit("::")
+        .find(|s| !s.starts_with('{'))
+        .unwrap_or(type_name)
+}
+
+/// Convert `snake_case` to `camelCase`.
+///
+/// `"forgot_password"` → `"forgotPassword"`
+/// `"list_users"` → `"listUsers"`
+/// `"register"` → `"register"` (no-op)
+fn snake_to_camel(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut capitalize_next = false;
+
+    for ch in s.chars() {
+        if ch == '_' {
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(ch.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
+}
+
+/// Derive a camelCase client method name from a handler function's type name.
+fn default_name_from_handler<H: 'static>() -> String {
+    let full = std::any::type_name::<H>();
+    let raw = handler_name_from_type_name(full);
+    snake_to_camel(raw)
+}
+
+// ---------------------------------------------------------------------------
+// ApiRouter
+// ---------------------------------------------------------------------------
+
+/// Builder that constructs both an [`axum::Router`] and a [`RouteCollection`].
+pub struct ApiRouter<S = ()>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router: Router<S>,
+    routes: RouteCollection,
+    current_group: Option<String>,
+}
+
+impl<S> ApiRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    /// Create a new empty builder.
+    pub fn new() -> Self {
+        Self {
+            router: Router::new(),
+            routes: RouteCollection::new(),
+            current_group: None,
+        }
+    }
+
+    /// Set the group for all subsequent routes.
+    pub fn group(mut self, name: &str) -> Self {
+        self.current_group = Some(name.to_string());
+        self
+    }
+
+    /// Clear the current group.
+    pub fn no_group(mut self) -> Self {
+        self.current_group = None;
+        self
+    }
+
+    /// Merge another `ApiRouter`'s router and routes into this one.
+    pub fn merge(mut self, other: ApiRouter<S>) -> Self {
+        self.router = self.router.merge(other.router);
+        self.routes.extend(other.routes);
+        self
+    }
+
+    /// Consume the builder and return the router and collected route metadata.
+    pub fn build(self) -> (Router<S>, RouteCollection) {
+        (self.router, self.routes)
+    }
+
+    // --- Standard HTTP method helpers ---
+
+    /// Add a GET route.
+    pub fn get<H, T>(self, path: &str, handler: H) -> RouteBuilder<S>
+    where
+        H: Handler<T, S> + 'static,
+        T: 'static,
+    {
+        let name = default_name_from_handler::<H>();
+        self.route(path, HttpMethod::Get, routing::get(handler), name)
+    }
+
+    /// Add a POST route.
+    pub fn post<H, T>(self, path: &str, handler: H) -> RouteBuilder<S>
+    where
+        H: Handler<T, S> + 'static,
+        T: 'static,
+    {
+        let name = default_name_from_handler::<H>();
+        self.route(path, HttpMethod::Post, routing::post(handler), name)
+    }
+
+    /// Add a PUT route.
+    pub fn put<H, T>(self, path: &str, handler: H) -> RouteBuilder<S>
+    where
+        H: Handler<T, S> + 'static,
+        T: 'static,
+    {
+        let name = default_name_from_handler::<H>();
+        self.route(path, HttpMethod::Put, routing::put(handler), name)
+    }
+
+    /// Add a PATCH route.
+    pub fn patch<H, T>(self, path: &str, handler: H) -> RouteBuilder<S>
+    where
+        H: Handler<T, S> + 'static,
+        T: 'static,
+    {
+        let name = default_name_from_handler::<H>();
+        self.route(path, HttpMethod::Patch, routing::patch(handler), name)
+    }
+
+    /// Add a DELETE route.
+    pub fn delete<H, T>(self, path: &str, handler: H) -> RouteBuilder<S>
+    where
+        H: Handler<T, S> + 'static,
+        T: 'static,
+    {
+        let name = default_name_from_handler::<H>();
+        self.route(path, HttpMethod::Delete, routing::delete(handler), name)
+    }
+
+    fn route(
+        mut self,
+        path: &str,
+        method: HttpMethod,
+        method_router: MethodRouter<S>,
+        default_name: String,
+    ) -> RouteBuilder<S> {
+        self.router = self.router.route(path, method_router);
+        let def = RouteDefinition {
+            name: default_name,
+            method,
+            path: path.to_string(),
+            auth: false,
+            body_type: None,
+            response_type: None,
+            query_type: None,
+            path_params: crate::extract_path_params(path),
+            group: self.current_group.clone(),
+            redirect: false,
+        };
+        RouteBuilder { parent: self, def }
+    }
+}
+
+impl<S> Default for ApiRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RouteBuilder
+// ---------------------------------------------------------------------------
+
+/// In-progress route definition. Chain `.body::<T>()`, `.response::<T>()`,
+/// `.auth()`, `.redirect()`, then finalize with `.done()` or `.as_("name")`.
+pub struct RouteBuilder<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    parent: ApiRouter<S>,
+    def: RouteDefinition,
+}
+
+impl<S> RouteBuilder<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    /// Set the request body type.
+    pub fn body<T: 'static>(mut self) -> Self {
+        self.def.body_type = Some(type_string::<T>());
+        self
+    }
+
+    /// Set the response type.
+    pub fn response<T: 'static>(mut self) -> Self {
+        self.def.response_type = Some(type_string::<T>());
+        self
+    }
+
+    /// Set the query parameters type.
+    pub fn query<T: 'static>(mut self) -> Self {
+        self.def.query_type = Some(type_string::<T>());
+        self
+    }
+
+    /// Set both body and response types at once.
+    ///
+    /// ```rust,ignore
+    /// .post("/users", create_user)
+    ///     .json::<CreateUserRequest, UserResponse>()
+    ///     .auth()
+    ///     .done()
+    /// ```
+    pub fn json<B: 'static, R: 'static>(mut self) -> Self {
+        self.def.body_type = Some(type_string::<B>());
+        self.def.response_type = Some(type_string::<R>());
+        self
+    }
+
+    /// Mark this route as requiring authentication.
+    pub fn auth(mut self) -> Self {
+        self.def.auth = true;
+        self
+    }
+
+    /// Mark this route as a browser redirect (URL builder, not fetch).
+    pub fn redirect(mut self) -> Self {
+        self.def.redirect = true;
+        self
+    }
+
+    /// Finalize the route using the auto-derived name (handler function name → camelCase).
+    pub fn done(mut self) -> ApiRouter<S> {
+        // name was already set from the handler in ApiRouter::route()
+        self.parent.routes.push(self.def);
+        self.parent
+    }
+
+    /// Finalize the route with an explicit client method name, overriding the auto-derived name.
+    pub fn as_(mut self, name: &str) -> ApiRouter<S> {
+        self.def.name = name.to_string();
+        self.parent.routes.push(self.def);
+        self.parent
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- strip_module_paths --
+
+    #[test]
+    fn strip_simple_type() {
+        assert_eq!(
+            strip_module_paths("myapp::types::UserResponse"),
+            "UserResponse"
+        );
+    }
+
+    #[test]
+    fn strip_vec_generic() {
+        assert_eq!(
+            strip_module_paths("alloc::vec::Vec<myapp::types::UserResponse>"),
+            "Vec<UserResponse>"
+        );
+    }
+
+    #[test]
+    fn strip_option_generic() {
+        assert_eq!(
+            strip_module_paths("core::option::Option<myapp::types::UserResponse>"),
+            "Option<UserResponse>"
+        );
+    }
+
+    #[test]
+    fn strip_plain_type() {
+        assert_eq!(strip_module_paths("String"), "String");
+    }
+
+    #[test]
+    fn strip_nested_generic() {
+        assert_eq!(
+            strip_module_paths("alloc::vec::Vec<core::option::Option<myapp::Foo>>"),
+            "Vec<Option<Foo>>"
+        );
+    }
+
+    // -- type_string --
+
+    #[test]
+    fn type_string_for_vec() {
+        assert_eq!(type_string::<Vec<String>>(), "Vec<String>");
+    }
+
+    #[test]
+    fn type_string_for_option() {
+        assert_eq!(type_string::<Option<String>>(), "Option<String>");
+    }
+
+    #[test]
+    fn type_string_for_plain() {
+        assert_eq!(type_string::<String>(), "String");
+    }
+
+    // -- snake_to_camel --
+
+    #[test]
+    fn camel_simple() {
+        assert_eq!(snake_to_camel("register"), "register");
+    }
+
+    #[test]
+    fn camel_two_words() {
+        assert_eq!(snake_to_camel("forgot_password"), "forgotPassword");
+    }
+
+    #[test]
+    fn camel_three_words() {
+        assert_eq!(snake_to_camel("list_all_users"), "listAllUsers");
+    }
+
+    #[test]
+    fn camel_already_camel() {
+        assert_eq!(snake_to_camel("listUsers"), "listUsers");
+    }
+
+    // -- handler_name_from_type_name --
+
+    #[test]
+    fn handler_name_simple() {
+        assert_eq!(
+            handler_name_from_type_name("myapp::plugins::email_password::register"),
+            "register"
+        );
+    }
+
+    #[test]
+    fn handler_name_nested() {
+        assert_eq!(
+            handler_name_from_type_name("myapp::handlers::admin::list_users"),
+            "list_users"
+        );
+    }
+
+    #[test]
+    fn handler_name_closure() {
+        assert_eq!(
+            handler_name_from_type_name("myapp::routes::handler::{{closure}}"),
+            "handler"
+        );
+    }
+
+    // -- default_name_from_handler --
+
+    fn dummy_list_users() {}
+    fn dummy_forgot_password() {}
+    fn dummy_register() {}
+
+    #[test]
+    fn default_name_list_users() {
+        let name = default_name_from_handler::<fn()>();
+        // For a plain fn() type, type_name is just the type signature, not useful.
+        // The real test is with named function items in builder_tests.rs.
+        // Here we just test the helpers individually.
+        assert!(!name.is_empty());
+    }
+
+    #[test]
+    fn default_name_via_snake_to_camel() {
+        // Simulate what happens: handler type_name ends with "list_users"
+        let raw = handler_name_from_type_name("myapp::handlers::list_users");
+        let name = snake_to_camel(raw);
+        assert_eq!(name, "listUsers");
+    }
+
+    #[test]
+    fn default_name_no_underscore() {
+        let raw = handler_name_from_type_name("myapp::handlers::register");
+        let name = snake_to_camel(raw);
+        assert_eq!(name, "register");
+    }
+}

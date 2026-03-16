@@ -182,6 +182,48 @@ fn body_only_no_response() {
 }
 
 #[test]
+fn vec_response_type() {
+    let routes = api_routes! {
+        listUsers: GET "/admin/users" [auth]
+            -> Vec<UserResponse>;
+    };
+    let r = &routes.routes()[0];
+    assert_eq!(r.response_type.as_deref(), Some("Vec<UserResponse>"));
+}
+
+#[test]
+fn option_response_type() {
+    let routes = api_routes! {
+        getUser: GET "/users/{id}" [auth]
+            -> Option<UserResponse>;
+    };
+    let r = &routes.routes()[0];
+    assert_eq!(r.response_type.as_deref(), Some("Option<UserResponse>"));
+}
+
+#[test]
+fn vec_body_type() {
+    let routes = api_routes! {
+        batchCreate: POST "/items"
+            body: Vec<CreateItemRequest> -> Vec<ItemResponse>;
+    };
+    let r = &routes.routes()[0];
+    assert_eq!(r.body_type.as_deref(), Some("Vec<CreateItemRequest>"));
+    assert_eq!(r.response_type.as_deref(), Some("Vec<ItemResponse>"));
+}
+
+#[test]
+fn vec_query_type() {
+    let routes = api_routes! {
+        listRuns: GET "/api/runs" [auth]
+            query: RunListQuery -> Vec<RunResponse>;
+    };
+    let r = &routes.routes()[0];
+    assert_eq!(r.query_type.as_deref(), Some("RunListQuery"));
+    assert_eq!(r.response_type.as_deref(), Some("Vec<RunResponse>"));
+}
+
+#[test]
 fn collection_extend() {
     let mut core = api_routes! {
         getSession: GET "/session" [auth]

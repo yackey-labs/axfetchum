@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "axum-ts-client"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "axum",
  "serde",

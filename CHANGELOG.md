@@ -1,3 +1,9 @@
+## 0.1.7 (2026-03-16)
+
+### Features
+
+- add ApiRouter builder and Vec<T>/Option<T> macro support
+
 ## 0.1.6 (2026-03-15)
 
 ### Fixes

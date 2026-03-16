@@ -1,98 +1,166 @@
 # axum-ts-client
 
-Auto-generate typed TypeScript API clients from Axum route metadata. Zero dependencies.
+Auto-generate typed TypeScript API clients from Axum route metadata.
 
-## What it does
+## Quick start
 
-You describe your API routes with a declarative Rust macro, and this crate generates a complete TypeScript client with:
+Define your routes once — get both an Axum router and a typed TypeScript client:
 
-- Typed fetch wrappers for every route
-- Path parameter interpolation
-- Query string serialization
-- Auth token injection
-- Error handling with typed error class
-- Optional route grouping (nested objects)
+```rust
+use axum_ts_client::ApiRouter;
 
-## What you need
+let (router, routes) = ApiRouter::<AppState>::new()
+    .group("emailPassword")
+    .post("/register", register)
+        .json::<RegisterRequest, MessageResponse>()
+        .done()
+    .post("/login", login)
+        .body::<LoginRequest>()
+        .done()
+    .post("/change-password", change_password)
+        .json::<ChangePasswordRequest, MessageResponse>()
+        .auth()
+        .done()
+    .group("admin")
+    .get("/admin/users", list_users)
+        .response::<Vec<UserResponse>>()
+        .auth()
+        .done()
+    .get("/admin/users/{id}", get_user)
+        .response::<UserResponse>()
+        .auth()
+        .done()
+    .delete("/admin/users/{id}", delete_user)
+        .auth()
+        .done()
+    .build();
 
-**Two crates work together:**
+// `router` is a real Axum Router — plug it into your app
+// `routes` generates a TypeScript client like this:
+```
 
-| Crate | What it generates | You need it for |
-|---|---|---|
-| **`axum-ts-client`** (this crate) | `generated.ts` — the API client with typed fetch wrappers | Route definitions, client factory, error class |
-| **[`ts-rs`](https://crates.io/crates/ts-rs)** (separate) | Individual `.ts` files per type (e.g., `LoginRequest.ts`) | TypeScript type definitions for your request/response structs |
+```typescript
+const api = createApiClient({
+  baseUrl: "http://localhost:3000",
+  getToken: async () => localStorage.getItem("token"),
+});
 
-`axum-ts-client` generates `import type { LoginRequest } from "./bindings/LoginRequest"` — those files come from `ts-rs`. You need both.
+await api.emailPassword.register({ email: "a@b.com", password: "secret" });
+await api.emailPassword.login({ email: "a@b.com", password: "secret" });
+const users = await api.admin.listUsers();
+const user = await api.admin.getUser("some-id");
+```
+
+Handler names auto-convert to camelCase: `list_users` → `listUsers`, `change_password` → `changePassword`. Override with `.as_("customName")` when needed.
 
 ## Installation
 
-Add both to your `Cargo.toml`:
-
 ```toml
 [dependencies]
-axum-ts-client = "0.1"
+axum-ts-client = { version = "0.1", features = ["axum"] }
 ts-rs = { version = "11", features = ["serde-compat"] }
 ```
 
-## Usage
+The `axum` feature enables the `ApiRouter` builder. Without it, the crate is zero-dependency and provides just the `api_routes!` macro and code generator.
 
-### 1. Derive TypeScript types on your structs
+## How it works
 
-Use `ts-rs` to generate `.ts` type files from your Rust types:
+**Two crates work together:**
+
+| Crate | Generates | Purpose |
+|---|---|---|
+| **`axum-ts-client`** | `generated.ts` — typed fetch wrappers | Route definitions, client factory, error handling |
+| **[`ts-rs`](https://crates.io/crates/ts-rs)** | Individual `.ts` type files | TypeScript interfaces for your Rust structs |
+
+`axum-ts-client` generates `import type { LoginRequest } from "./bindings/LoginRequest"` — those files come from `ts-rs`.
+
+## Two ways to define routes
+
+### Option A: ApiRouter builder (recommended)
+
+One definition, zero duplication — builds both the Axum router and the route metadata:
 
 ```rust
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
+use axum_ts_client::ApiRouter;
 
-#[derive(Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct LoginRequest {
-    pub email: String,
-    pub password: String,
-}
-
-#[derive(Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct LoginResponse {
-    pub token: String,
-    pub user_id: String,
+fn user_routes() -> (Router<AppState>, RouteCollection) {
+    ApiRouter::<AppState>::new()
+        .group("users")
+        .get("/users", list_users)
+            .response::<Vec<UserResponse>>()
+            .auth()
+            .done()
+        .post("/users", create_user)
+            .json::<CreateUserRequest, UserResponse>()
+            .auth()
+            .done()
+        .get("/users/{id}", get_user)
+            .response::<UserResponse>()
+            .auth()
+            .done()
+        .delete("/users/{id}", delete_user)
+            .auth()
+            .done()
+        .build()
 }
 ```
 
-### 2. Define your route metadata
+**Builder features:**
+- **Auto camelCase names** — `list_users` → `listUsers`, no string literals needed
+- **`.json::<Body, Response>()`** — set both types in one call
+- **`.done()`** — finalize with the auto-derived name
+- **`.as_("name")`** — override the auto-name when you want something different
+- **`.merge()`** — compose multiple ApiRouters (great for plugin architectures)
+- **`Vec<T>`, `Option<T>`** — generic types just work
+
+Requires `features = ["axum"]`.
+
+### Option B: Declarative macro (zero dependencies)
+
+Metadata-only, no Axum dependency — you build the router separately:
 
 ```rust
 use axum_ts_client::{api_routes, RouteCollection};
 
 pub fn routes() -> RouteCollection {
     api_routes! {
-        getSession: GET "/session" [auth]
-            -> SessionResponse;
-        logout: POST "/logout" [auth];
-
         @group emailPassword
 
         register: POST "/register"
             body: RegisterRequest -> MessageResponse;
         login: POST "/login"
             body: LoginRequest -> LoginResponse;
-
-        @group admin
-
         listUsers: GET "/admin/users" [auth]
-            query: ListUsersQuery -> ListUsersResponse;
+            query: ListUsersQuery -> Vec<UserResponse>;
         getUser: GET "/admin/users/{id}" [auth]
             -> UserResponse;
-        deleteUser: DELETE "/admin/users/{id}" [auth];
+        authorize: GET "/oauth/{provider}/authorize" [redirect]
+            query: AuthorizeQuery;
     }
 }
 ```
 
-### 3. Generate the client in a test
+**Macro syntax:**
 
-Generation runs as a `#[test]` rather than a `build.rs` script because `build.rs` runs *before* your crate compiles — it can't call your route metadata functions since they don't exist yet. A test runs *after* compilation, so it can import your crate's public API, call `all_routes()`, and pass the result to the generator.
+```
+name: METHOD "/path" [flags]
+    body: RequestType query: QueryType -> ResponseType;
+```
 
-This also means the generated file is committed to your repo, not rebuilt on every `cargo build`. You regenerate explicitly when routes change, and CI catches staleness via `check()`.
+| Element | Description |
+|---|---|
+| `@group name` | Groups subsequent routes into a nested object |
+| `@nogroup` | Clears the current group |
+| `[auth]` | Marks route as requiring authentication |
+| `[redirect]` | Generates a URL builder instead of a fetch call |
+| `body: Type` | Request body (supports `Vec<T>`, `Option<T>`) |
+| `query: Type` | Query parameters (supports `Vec<T>`, `Option<T>`) |
+| `-> Type` | Response type (supports `Vec<T>`, `Option<T>`, omit for `void`) |
+| `{param}` in path | Path parameter (becomes a `string` function arg) |
+
+## Generating the client
+
+Generation runs as a `#[test]` — not a `build.rs` — because it needs to call your crate's route functions after compilation.
 
 ```rust
 use axum_ts_client::GeneratorConfig;
@@ -112,56 +180,23 @@ fn config() -> GeneratorConfig {
 
 #[test]
 fn generate_ts_client() {
-    let routes = my_crate::routes();
+    // With ApiRouter:
+    let (_router, routes) = my_app::user_routes();
+    // Or with macro:
+    // let routes = my_app::routes();
     axum_ts_client::generate_to_file(&routes, &config()).unwrap();
 }
 
 #[test]
 fn check_ts_client_up_to_date() {
-    let routes = my_crate::routes();
+    let (_router, routes) = my_app::user_routes();
     axum_ts_client::check(&routes, &config())
         .expect("Generated TypeScript client is out of date! Run: cargo test generate_ts_client");
 }
 ```
 
-Run `cargo test generate_ts_client` to regenerate. Run `check_ts_client_up_to_date` in CI to fail if someone changes routes without regenerating.
-
-### 4. Use the generated client in TypeScript
-
-```typescript
-import { createApiClient } from "./generated";
-
-const api = createApiClient({
-  baseUrl: "http://localhost:3000",
-  getToken: async () => localStorage.getItem("token"),
-});
-
-// Fully typed — args, request body, and return type are all inferred
-const session = await api.getSession();
-const result = await api.emailPassword.login({ email: "a@b.com", password: "secret" });
-const user = await api.admin.getUser("some-id");
-```
-
-## Macro syntax
-
-```
-name: METHOD "/path" [flags]
-    body: RequestType query: QueryType -> ResponseType;
-```
-
-| Element | Description |
-|---|---|
-| `@group name` | Groups subsequent routes into a nested object |
-| `@nogroup` | Clears the current group |
-| `[auth]` | Marks route as requiring authentication |
-| `[redirect]` | Generates a URL builder instead of a fetch call |
-| `[auth, redirect]` | Multiple flags are comma-separated |
-| `body: Type` | Request body type |
-| `query: Type` | Query parameters type |
-| `-> Type` | Response type (omit for `void`) |
-| `{param}` in path | Path parameter (becomes a `string` function arg) |
-
-All parts except `name`, `METHOD`, `"/path"`, and the trailing `;` are optional.
+**Local:** `cargo test generate_ts_client` to regenerate.
+**CI:** `cargo test check_ts_client_up_to_date` fails if the committed file is stale.
 
 ## GeneratorConfig
 
@@ -175,57 +210,18 @@ All parts except `name`, `METHOD`, `"/path"`, and the trailing `;` are optional.
 | `options_interface_name` | `"ClientOptions"` | Name of the options interface |
 | `default_credentials` | `"include"` | Default `RequestCredentials` value |
 | `type_import_prefix` | (computed) | Import path from generated file to bindings dir |
-| `format_command` | `None` | Shell command to format after generation (e.g., `"bun biome check --write --unsafe"`) |
-
-## CI enforcement
-
-The `check()` function compares the committed client file against what the generator would produce. If a route is added, removed, or changed without regenerating, `check()` fails with a clear error message.
-
-The recommended pattern is two tests sharing a config:
-
-```rust
-#[test]
-fn generate_ts_client() {
-    let routes = my_crate::routes();
-    axum_ts_client::generate_to_file(&routes, &config()).unwrap();
-}
-
-#[test]
-fn check_ts_client_up_to_date() {
-    let routes = my_crate::routes();
-    axum_ts_client::check(&routes, &config())
-        .expect("Generated TypeScript client is out of date! Run: cargo test generate_ts_client");
-}
-```
-
-**Local dev:** run `cargo test generate_ts_client` to regenerate after changing routes.
-
-**CI:** run `cargo test check_ts_client_up_to_date` (or just `cargo test` — both tests will run). If the committed file is stale, CI fails with:
-
-```
-Generated TypeScript client is out of sync with './packages/client/src/generated.ts'.
-Run the generate command to update it.
-```
-
-If you use `format_command`, `check()` writes to a temp file, runs the formatter, and compares the formatted output against the committed file — so CI accounts for formatter changes too.
-
-A typical CI step:
-
-```yaml
-- name: Check generated client
-  run: cargo test check_ts_client_up_to_date
-```
+| `format_command` | `None` | Shell command to format after generation |
 
 ## Generated output
-
-See [tests/snapshots/yauth_style.ts](tests/snapshots/yauth_style.ts) for a full example.
 
 The generated client includes:
 - Type imports from `ts-rs` bindings
 - A typed error class (extends `Error` with `status` and `body`)
 - A client options interface (`baseUrl`, `getToken`, `credentials`, `fetch`, `onError`)
-- A factory function that returns an object of typed fetch methods
+- A factory function returning typed fetch methods with optional grouping
 - A type alias: `export type ApiClient = ReturnType<typeof createApiClient>`
+
+See [tests/snapshots/yauth_style.ts](tests/snapshots/yauth_style.ts) for a full example.
 
 ## License
 

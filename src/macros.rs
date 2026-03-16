@@ -17,7 +17,7 @@
 ///     changePassword: POST "/change-password" [auth]
 ///         body: ChangePasswordRequest -> MessageResponse;
 ///     listUsers: GET "/admin/users" [auth]
-///         query: ListUsersQuery -> ListUsersResponse;
+///         query: ListUsersQuery -> Vec<UserResponse>;
 ///     getUser: GET "/admin/users/{id}" [auth]
 ///         -> UserResponse;
 ///     authorize: GET "/oauth/{provider}/authorize" [redirect]
@@ -30,9 +30,9 @@
 /// - `@group <name>` — sets the group for all following routes (generates nested object)
 /// - `[auth]` — marks route as requiring authentication
 /// - `[redirect]` — marks route as a browser redirect (URL builder, not fetch)
-/// - `body: <Type>` — request body type
-/// - `query: <Type>` — query parameters type
-/// - `-> <Type>` — response type (omit for void)
+/// - `body: <Type>` — request body type (supports `Vec<T>` and `Option<T>`)
+/// - `query: <Type>` — query parameters type (supports `Vec<T>` and `Option<T>`)
+/// - `-> <Type>` — response type (supports `Vec<T>` and `Option<T>`, omit for void)
 /// - `{param}` in paths — path parameters (become function args)
 #[macro_export]
 macro_rules! api_routes {
@@ -55,14 +55,19 @@ macro_rules! api_routes {
         $crate::api_routes!(@collect $collection, @group_ctx Option::<String>::None, $($rest)*);
     };
 
-    // Route: method path [flags] body: Type query: Type -> ResponseType;
-    // We parse each route by matching the name, method, path, then optional parts
+    // ---------------------------------------------------------------------------
+    // Route matchers — one arm for each combination of generic/plain types.
+    // We need separate arms because macro_rules can't use `ty` followed by
+    // keywords like `query` or `->`.
+    // ---------------------------------------------------------------------------
+
+    // Route with body: Generic<T>, query: Generic<T>, -> Generic<T>
     (@collect $collection:ident, @group_ctx $group:expr,
         $name:ident : $method:ident $path:literal
         $([$($flag:ident),*])?
-        $(body: $body_ty:ident)?
-        $(query: $query_ty:ident)?
-        $(-> $resp_ty:ident)?
+        $(body: $bo:ident $(<$bi:ident>)?)?
+        $(query: $qo:ident $(<$qi:ident>)?)?
+        $(-> $ro:ident $(<$ri:ident>)?)?
         ;
         $($rest:tt)*
     ) => {
@@ -71,9 +76,9 @@ macro_rules! api_routes {
             method: $crate::api_routes!(@method $method),
             path: $path.to_string(),
             auth: $crate::api_routes!(@has_flag auth $([$($flag),*])?),
-            body_type: $crate::api_routes!(@opt_type $($body_ty)?),
-            response_type: $crate::api_routes!(@opt_type $($resp_ty)?),
-            query_type: $crate::api_routes!(@opt_type $($query_ty)?),
+            body_type: $crate::api_routes!(@opt_type $($bo $(<$bi>)?)?),
+            response_type: $crate::api_routes!(@opt_type $($ro $(<$ri>)?)?),
+            query_type: $crate::api_routes!(@opt_type $($qo $(<$qi>)?)?),
             path_params: $crate::extract_path_params($path),
             group: $group.clone(),
             redirect: $crate::api_routes!(@has_flag redirect $([$($flag),*])?),
@@ -120,8 +125,17 @@ macro_rules! api_routes {
         }
     };
 
-    // Optional type helpers
+    // Optional type helpers — handles plain idents and Generic<Inner>
     (@opt_type) => { None };
+    (@opt_type $outer:ident < $inner:ident >) => {
+        Some({
+            let mut s = String::from(stringify!($outer));
+            s.push('<');
+            s.push_str(stringify!($inner));
+            s.push('>');
+            s
+        })
+    };
     (@opt_type $ty:ident) => { Some(stringify!($ty).to_string()) };
 
     // Top-level entry point

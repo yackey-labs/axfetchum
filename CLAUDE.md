@@ -1,10 +1,10 @@
-# CLAUDE.md — axum-ts-client
+# CLAUDE.md — axfetchum
 
 ## What This Is
 
-`axum-ts-client` is a zero-dependency Rust crate that auto-generates typed TypeScript API clients from Axum route metadata. It combines a declarative `api_routes!` macro with a code generator to produce complete, typed fetch wrappers.
+`axfetchum` is a zero-dependency Rust crate that auto-generates typed TypeScript API clients from Axum route metadata. It combines a declarative `api_routes!` macro with a code generator to produce complete, typed fetch wrappers.
 
-**Repo:** `forgejo.yackey.cloud/yackey-cloud/axum-ts-client`
+**Repo:** `github.com/yackey-labs/axfetchum`
 
 ## Key Commands
 
@@ -44,7 +44,7 @@ This crate uses only `std` — no `syn`, `quote`, `proc-macro2`. The macro uses 
 - **Semantic versioning** is automated via [knope](https://knope.tech) + Forgejo CI
 - **NEVER manually edit version numbers** in `Cargo.toml` — knope manages them from conventional commits
 - `feat:` → minor bump, `fix:` → patch bump, `feat!:` / `fix!:` / `BREAKING CHANGE:` → major bump
-- Pushing to `main` triggers: CI check → `knope release` → version bump + changelog + Forgejo release + `cargo publish`
+- Pushing to `main` triggers: CI check → `knope release` → version bump + changelog + GitHub release + `cargo publish`
 - The `chore: prepare release` commit pushed by the release job is skipped by the `if: !startsWith(...)` guard
 - To preview what knope will do: `knope release --dry-run`
 

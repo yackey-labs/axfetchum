@@ -9,7 +9,7 @@ extra_changelog_sections = [
 
 [github]
 owner = "yackey-labs"
-repo = "axum-ts-client"
+repo = "axfetchum"
 
 [[workflows]]
 name = "release"
@@ -24,6 +24,10 @@ command = "git commit -m \"chore: prepare release $version\""
 [[workflows.steps]]
 type = "Command"
 command = "git push"
+
+[[workflows.steps]]
+type = "Command"
+command = "cargo publish"
 
 [[workflows.steps]]
 type = "Release"

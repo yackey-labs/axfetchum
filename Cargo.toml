@@ -1,13 +1,13 @@
 [package]
-name = "axum-ts-client"
-version = "0.1.7"
+name = "axfetchum"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/yackey-labs/axum-ts-client"
+repository = "https://github.com/yackey-labs/axfetchum"
 description = "Auto-generate typed TypeScript API clients from Axum route metadata"
 keywords = ["axum", "typescript", "codegen", "api-client"]
 categories = ["development-tools", "web-programming"]
-publish = false
+publish = true
 
 [features]
 default = []

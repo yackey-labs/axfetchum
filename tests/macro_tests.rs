@@ -1,4 +1,4 @@
-use axum_ts_client::{HttpMethod, api_routes};
+use axfetchum::{HttpMethod, api_routes};
 
 #[test]
 fn simple_get_route() {

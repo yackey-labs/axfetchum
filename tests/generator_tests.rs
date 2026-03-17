@@ -1,4 +1,4 @@
-use axum_ts_client::{GeneratorConfig, api_routes, generate};
+use axfetchum::{GeneratorConfig, api_routes, generate};
 
 fn yauth_config() -> GeneratorConfig {
     GeneratorConfig {
@@ -14,7 +14,7 @@ fn yauth_config() -> GeneratorConfig {
     }
 }
 
-fn sample_routes() -> axum_ts_client::RouteCollection {
+fn sample_routes() -> axfetchum::RouteCollection {
     let mut routes = api_routes! {
         getSession: GET "/session" [auth]
             -> SessionResponse;
@@ -218,7 +218,7 @@ fn check_detects_out_of_sync() {
     use std::io::Write;
 
     let routes = sample_routes();
-    let dir = std::env::temp_dir().join("axum_ts_client_test");
+    let dir = std::env::temp_dir().join("axfetchum_test");
     std::fs::create_dir_all(&dir).unwrap();
     let output_path = dir.join("generated.ts");
 
@@ -233,14 +233,14 @@ fn check_detects_out_of_sync() {
     drop(f);
 
     // Check should fail
-    let result = axum_ts_client::check(&routes, &config);
+    let result = axfetchum::check(&routes, &config);
     assert!(result.is_err());
 
     // Now write correct content
-    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+    axfetchum::generate_to_file(&routes, &config).unwrap();
 
     // Check should pass
-    let result = axum_ts_client::check(&routes, &config);
+    let result = axfetchum::check(&routes, &config);
     assert!(result.is_ok());
 
     // Cleanup
@@ -268,7 +268,7 @@ fn snapshot_yauth_style_output() {
 #[test]
 fn generate_to_file_runs_format_command() {
     let routes = sample_routes();
-    let dir = std::env::temp_dir().join("axum_ts_client_fmt_test");
+    let dir = std::env::temp_dir().join("axfetchum_fmt_test");
     std::fs::create_dir_all(&dir).unwrap();
     let output_path = dir.join("generated.ts");
 
@@ -279,7 +279,7 @@ fn generate_to_file_runs_format_command() {
         ..yauth_config()
     };
 
-    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+    axfetchum::generate_to_file(&routes, &config).unwrap();
 
     let content = std::fs::read_to_string(&output_path).unwrap();
     assert!(
@@ -297,7 +297,7 @@ fn generate_to_file_runs_format_command() {
 #[test]
 fn check_passes_with_format_command() {
     let routes = sample_routes();
-    let dir = std::env::temp_dir().join("axum_ts_client_fmt_check");
+    let dir = std::env::temp_dir().join("axfetchum_fmt_check");
     std::fs::create_dir_all(&dir).unwrap();
     let output_path = dir.join("generated.ts");
 
@@ -308,10 +308,10 @@ fn check_passes_with_format_command() {
     };
 
     // generate_to_file writes + formats
-    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+    axfetchum::generate_to_file(&routes, &config).unwrap();
 
     // check should pass (generates to temp, formats, compares)
-    let result = axum_ts_client::check(&routes, &config);
+    let result = axfetchum::check(&routes, &config);
     assert!(
         result.is_ok(),
         "check should pass after generate_to_file with same format_command"
@@ -323,7 +323,7 @@ fn check_passes_with_format_command() {
 #[test]
 fn check_fails_when_format_command_not_applied() {
     let routes = sample_routes();
-    let dir = std::env::temp_dir().join("axum_ts_client_fmt_mismatch");
+    let dir = std::env::temp_dir().join("axfetchum_fmt_mismatch");
     std::fs::create_dir_all(&dir).unwrap();
     let output_path = dir.join("generated.ts");
 
@@ -333,7 +333,7 @@ fn check_fails_when_format_command_not_applied() {
         format_command: None,
         ..yauth_config()
     };
-    axum_ts_client::generate_to_file(&routes, &unformatted_config).unwrap();
+    axfetchum::generate_to_file(&routes, &unformatted_config).unwrap();
 
     // Check with a format_command — the on-disk file is unformatted, so it should fail
     let formatted_config = GeneratorConfig {
@@ -341,7 +341,7 @@ fn check_fails_when_format_command_not_applied() {
         format_command: Some("sed -i s/Auto-generated/FORMATTED/".into()),
         ..yauth_config()
     };
-    let result = axum_ts_client::check(&routes, &formatted_config);
+    let result = axfetchum::check(&routes, &formatted_config);
     assert!(
         result.is_err(),
         "check should fail when on-disk file was not formatted"
@@ -353,7 +353,7 @@ fn check_fails_when_format_command_not_applied() {
 #[test]
 fn format_command_none_preserves_existing_behavior() {
     let routes = sample_routes();
-    let dir = std::env::temp_dir().join("axum_ts_client_no_fmt");
+    let dir = std::env::temp_dir().join("axfetchum_no_fmt");
     std::fs::create_dir_all(&dir).unwrap();
     let output_path = dir.join("generated.ts");
 
@@ -363,7 +363,7 @@ fn format_command_none_preserves_existing_behavior() {
         ..yauth_config()
     };
 
-    axum_ts_client::generate_to_file(&routes, &config).unwrap();
+    axfetchum::generate_to_file(&routes, &config).unwrap();
 
     // Content should match raw generate() output exactly
     let content = std::fs::read_to_string(&output_path).unwrap();
@@ -371,7 +371,7 @@ fn format_command_none_preserves_existing_behavior() {
     assert_eq!(content, expected);
 
     // check should pass
-    let result = axum_ts_client::check(&routes, &config);
+    let result = axfetchum::check(&routes, &config);
     assert!(result.is_ok());
 
     std::fs::remove_dir_all(&dir).ok();

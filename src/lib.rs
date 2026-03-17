@@ -1,4 +1,4 @@
-//! # axum-ts-client
+//! # axfetchum
 //!
 //! Auto-generate typed TypeScript API clients from Axum route metadata.
 //!
@@ -16,7 +16,7 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use axum_ts_client::{api_routes, RouteCollection};
+//! use axfetchum::{api_routes, RouteCollection};
 //!
 //! fn my_routes() -> RouteCollection {
 //!     api_routes! {

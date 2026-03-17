@@ -1,3 +1,9 @@
+## 0.1.1 (2026-03-17)
+
+### Fixes
+
+- update crate name references from axum_ts_client to axfetchum
+
 ## 0.1.7 (2026-03-16)
 
 ### Features

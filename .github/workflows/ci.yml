@@ -34,6 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore:')
+    permissions:
+      contents: write
+      id-token: write  # required for crates.io trusted publishing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +61,6 @@ jobs:
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           output=$(knope release 2>&1) && exit 0
           if echo "$output" | grep -qi "no releasable changes\|nothing to release\|no changes"; then

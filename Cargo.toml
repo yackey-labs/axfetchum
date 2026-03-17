@@ -3,11 +3,11 @@ name = "axum-ts-client"
 version = "0.1.7"
 edition = "2024"
 license = "MIT"
-repository = "https://forgejo.yackey.cloud/yackey-cloud/axum-ts-client"
+repository = "https://github.com/yackey-labs/axum-ts-client"
 description = "Auto-generate typed TypeScript API clients from Axum route metadata"
 keywords = ["axum", "typescript", "codegen", "api-client"]
 categories = ["development-tools", "web-programming"]
-publish = ["yauth"]
+publish = false
 
 [features]
 default = []

@@ -7,10 +7,9 @@ extra_changelog_sections = [
     { name = "Documentation", types = ["docs"] },
 ]
 
-[gitea]
-owner = "yackey-cloud"
+[github]
+owner = "yackey-labs"
 repo = "axum-ts-client"
-host = "https://forgejo.yackey.cloud"
 
 [[workflows]]
 name = "release"
@@ -21,13 +20,6 @@ type = "PrepareRelease"
 [[workflows.steps]]
 type = "Command"
 command = "git commit -m \"chore: prepare release $version\""
-
-# Publish before git push — the push triggers a new CI run that may
-# cancel this job, so cargo publish must complete first.
-[[workflows.steps]]
-type = "Command"
-command = "cargo publish --registry yauth --no-verify --allow-dirty"
-shell = true
 
 [[workflows.steps]]
 type = "Command"

@@ -1,3 +1,0 @@
-[registries.yauth]
-index = "sparse+https://forgejo.yackey.cloud/api/packages/yackey-cloud/cargo/"
-credential-provider = "cargo:token"

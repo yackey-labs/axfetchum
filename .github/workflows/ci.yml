@@ -16,7 +16,7 @@ env:
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
 
@@ -31,14 +31,14 @@ jobs:
 
   release:
     name: Release
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
     needs: [check]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore:')
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
+          token: ${{ secrets.INFRA_DEPLOY_TOKEN }}
 
       - name: Install Rust
         run: |
@@ -52,14 +52,12 @@ jobs:
 
       - name: Configure git
         run: |
-          git config user.name "forgejo-actions[bot]"
-          git config user.email "forgejo-actions[bot]@noreply.forgejo.yackey.cloud"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Release
         env:
-          GITEA_TOKEN: ${{ secrets.RELEASE_PAT }}
-          CARGO_REGISTRIES_YAUTH_TOKEN: "token ${{ secrets.REGISTRY_TOKEN }}"
-          CARGO_REGISTRY_GLOBAL_CREDENTIAL_PROVIDERS: "cargo:token"
+          GITHUB_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
         run: |
           output=$(knope release 2>&1) && exit 0
           if echo "$output" | grep -qi "no releasable changes\|nothing to release\|no changes"; then

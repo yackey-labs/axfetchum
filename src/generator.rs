@@ -302,7 +302,7 @@ const REQUEST_HELPER: &str = r#"function createRequest(options: __OPTS__) {
 
     if (auth && options.getToken) {
       const token = await options.getToken();
-      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (token) headers.Authorization = `Bearer ${token}`;
     }
 
     const response = await fetchFn(url, {

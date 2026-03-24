@@ -1,3 +1,14 @@
+## 0.1.3 (2026-03-24)
+
+### Features
+
+- switch to crates.io trusted publishing, remove CARGO_REGISTRY_TOKEN
+
+### Fixes
+
+- update crate name references from axum_ts_client to axfetchum
+- use dot notation for Authorization header (biome useLiteralKeys)
+
 ## 0.1.2 (2026-03-17)
 
 ### Features

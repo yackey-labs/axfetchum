@@ -1,4 +1,4 @@
-# axum-ts-client
+# axfetchum
 
 Auto-generate typed TypeScript API clients from Axum route metadata.
 
@@ -7,7 +7,7 @@ Auto-generate typed TypeScript API clients from Axum route metadata.
 Define your routes once — get both an Axum router and a typed TypeScript client:
 
 ```rust
-use axum_ts_client::ApiRouter;
+use axfetchum::ApiRouter;
 
 let (router, routes) = ApiRouter::<AppState>::new()
     .group("emailPassword")
@@ -57,7 +57,7 @@ Handler names auto-convert to camelCase: `list_users` → `listUsers`, `change_p
 
 ```toml
 [dependencies]
-axum-ts-client = { version = "0.1", features = ["axum"] }
+axfetchum = { version = "0.1", features = ["axum"] }
 ts-rs = { version = "11", features = ["serde-compat"] }
 ```
 
@@ -69,10 +69,10 @@ The `axum` feature enables the `ApiRouter` builder. Without it, the crate is zer
 
 | Crate | Generates | Purpose |
 |---|---|---|
-| **`axum-ts-client`** | `generated.ts` — typed fetch wrappers | Route definitions, client factory, error handling |
+| **`axfetchum`** | `generated.ts` — typed fetch wrappers | Route definitions, client factory, error handling |
 | **[`ts-rs`](https://crates.io/crates/ts-rs)** | Individual `.ts` type files | TypeScript interfaces for your Rust structs |
 
-`axum-ts-client` generates `import type { LoginRequest } from "./bindings/LoginRequest"` — those files come from `ts-rs`.
+`axfetchum` generates `import type { LoginRequest } from "./bindings/LoginRequest"` — those files come from `ts-rs`.
 
 ## Two ways to define routes
 
@@ -81,7 +81,7 @@ The `axum` feature enables the `ApiRouter` builder. Without it, the crate is zer
 One definition, zero duplication — builds both the Axum router and the route metadata:
 
 ```rust
-use axum_ts_client::ApiRouter;
+use axfetchum::ApiRouter;
 
 fn user_routes() -> (Router<AppState>, RouteCollection) {
     ApiRouter::<AppState>::new()
@@ -120,7 +120,7 @@ Requires `features = ["axum"]`.
 Metadata-only, no Axum dependency — you build the router separately:
 
 ```rust
-use axum_ts_client::{api_routes, RouteCollection};
+use axfetchum::{api_routes, RouteCollection};
 
 pub fn routes() -> RouteCollection {
     api_routes! {
@@ -163,7 +163,7 @@ name: METHOD "/path" [flags]
 Generation runs as a `#[test]` — not a `build.rs` — because it needs to call your crate's route functions after compilation.
 
 ```rust
-use axum_ts_client::GeneratorConfig;
+use axfetchum::GeneratorConfig;
 
 fn config() -> GeneratorConfig {
     GeneratorConfig {
@@ -184,13 +184,13 @@ fn generate_ts_client() {
     let (_router, routes) = my_app::user_routes();
     // Or with macro:
     // let routes = my_app::routes();
-    axum_ts_client::generate_to_file(&routes, &config()).unwrap();
+    axfetchum::generate_to_file(&routes, &config()).unwrap();
 }
 
 #[test]
 fn check_ts_client_up_to_date() {
     let (_router, routes) = my_app::user_routes();
-    axum_ts_client::check(&routes, &config())
+    axfetchum::check(&routes, &config())
         .expect("Generated TypeScript client is out of date! Run: cargo test generate_ts_client");
 }
 ```

@@ -3,7 +3,7 @@
 /// # Syntax
 ///
 /// ```rust,ignore
-/// use axum_ts_client::api_routes;
+/// use axfetchum::api_routes;
 ///
 /// let routes = api_routes! {
 ///     @group emailPassword

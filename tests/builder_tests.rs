@@ -2,7 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use axum_ts_client::{ApiRouter, HttpMethod};
+use axfetchum::{ApiRouter, HttpMethod};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
@@ -268,12 +268,12 @@ fn builder_generates_valid_ts() {
         .done()
         .build();
 
-    let config = axum_ts_client::GeneratorConfig {
+    let config = axfetchum::GeneratorConfig {
         factory_name: "createApiClient".into(),
         ..Default::default()
     };
 
-    let output = axum_ts_client::generate(&routes, &config);
+    let output = axfetchum::generate(&routes, &config);
     assert!(output.contains("listUsers"));
     assert!(output.contains("createUser"));
     assert!(output.contains("UserResponse[]")); // Vec<UserResponse> → UserResponse[]

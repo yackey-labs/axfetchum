@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use axum_ts_client::ApiRouter;
+//! use axfetchum::ApiRouter;
 //!
 //! // Handler names auto-convert to camelCase client methods.
 //! // list_users → listUsers, create_user → createUser

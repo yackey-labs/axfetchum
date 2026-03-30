@@ -630,10 +630,9 @@ pub fn check(routes: &RouteCollection, config: &GeneratorConfig) -> Result<(), C
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let temp = TempFile(std::env::temp_dir().join(format!(
-            "axfetchum_check_{}_{nanos}.ts",
-            std::process::id()
-        )));
+        let temp = TempFile(
+            std::env::temp_dir().join(format!("axfetchum_check_{}_{nanos}.ts", std::process::id())),
+        );
         let temp_str = temp.0.to_string_lossy().to_string();
 
         std::fs::write(&temp.0, &generated).map_err(|e| CheckError::ReadError {

@@ -1,8 +1,8 @@
 #![cfg(feature = "axum")]
 
+use axfetchum::{ApiRouter, HttpMethod};
 use axum::Json;
 use axum::extract::{Path, State};
-use axfetchum::{ApiRouter, HttpMethod};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]

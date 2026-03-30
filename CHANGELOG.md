@@ -1,3 +1,10 @@
+## 0.1.4 (2026-03-30)
+
+### Fixes
+
+- replace remaining axum-ts-client references with axfetchum
+- apply cargo fmt formatting fixes
+
 ## 0.1.3 (2026-03-24)
 
 ### Features
